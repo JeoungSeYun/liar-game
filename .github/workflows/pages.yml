@@ -22,6 +22,10 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      # 브라우저가 옛 스크립트를 붙들면 방장과 참가자가 서로 다른 버전을 돌리게 된다.
+      # 배포마다 커밋 해시를 붙여 캐시를 확실히 갈아엎는다.
+      - name: Bust asset cache
+        run: sed -i "s/?v=dev/?v=${GITHUB_SHA::7}/g" public/index.html
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
