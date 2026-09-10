@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>라이어 게임</title>
+<meta name="description" content="친구들과 브라우저에서 즐기는 라이어 게임. 방 코드 하나로 바로 시작.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Noto+Sans+KR:wght@400;500;700&display=swap">
+<link rel="stylesheet" href="/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230e0c12'/%3E%3Ctext x='32' y='44' font-size='36' text-anchor='middle' fill='%23d4a64a' font-family='sans-serif' font-weight='900'%3EL%3C/text%3E%3C/svg%3E">
+</head>
+<body>
+<div id="toast" class="toast" hidden></div>
+
+<!-- 홈 -->
+<section id="home" class="screen home">
+  <div class="home-inner">
+    <div class="brand-block">
+      <div class="eyebrow">서로를 속고 속이는 심리전</div>
+      <h1 class="brand">LIAR<br>GAME</h1>
+      <p class="tagline">한 명은 제시어를 모른다. 말 한 마디가 승패를 가른다.</p>
+    </div>
+    <form id="homeForm" class="home-form" autocomplete="off">
+      <label class="field">
+        <span>닉네임</span>
+        <input id="nameInput" maxlength="12" placeholder="예: 민수" required>
+      </label>
+      <div class="home-actions">
+        <button type="button" id="createBtn" class="btn primary big">방 만들기</button>
+        <div class="join-row">
+          <input id="codeInput" maxlength="4" placeholder="방 코드" class="code-input" autocapitalize="characters">
+          <button type="submit" id="joinBtn" class="btn big">참가</button>
+        </div>
+      </div>
+      <div id="connStatus" class="conn-status">서버 연결 중…</div>
+    </form>
+    <details class="rules">
+      <summary>게임 규칙</summary>
+      <ol>
+        <li>모두에게 같은 <b>제시어</b>가 주어지지만, <b>라이어</b> 한 명은 카테고리만 알고 제시어를 모릅니다.</li>
+        <li>순서대로 제시어를 한 줄로 설명합니다. 라이어는 눈치껏 아는 척해야 합니다.</li>
+        <li>토론 뒤 투표로 라이어를 지목합니다. 동률이면 한 번 재투표, 또 동률이면 라이어 승.</li>
+        <li>라이어가 지목되면 마지막 기회! 제시어를 맞히면 라이어가 역전승합니다.</li>
+        <li>바보 모드: 라이어에게 <b>다른 제시어</b>를 주고 본인도 라이어인 줄 모르게 합니다.</li>
+      </ol>
+      <p class="score-rule">점수: 시민 승리 +1 · 라이어 정답 +2 · 라이어 생존 +3</p>
+    </details>
+  </div>
+</section>
+
+<!-- 게임 -->
+<section id="game" class="screen game" hidden>
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="brand-mini">LIAR GAME</span>
+      <span class="room-code" id="roomCode" title="방 코드"></span>
+    </div>
+    <div class="topbar-mid" id="phaseLabel"></div>
+    <div class="topbar-right">
+      <span id="connDot" class="conn-dot" title="서버 연결"></span>
+      <button id="leaveBtn" class="btn ghost small">나가기</button>
+    </div>
+  </header>
+  <div class="timer" id="timer" hidden>
+    <div class="timer-bar"><div class="timer-fill" id="timerFill"></div></div>
+    <div class="timer-num" id="timerNum">0</div>
+  </div>
+
+  <div class="layout">
+    <aside class="players" id="players"></aside>
+    <main class="stage" id="stage"></main>
+    <aside class="chat">
+      <div class="chat-log" id="chatLog"></div>
+      <form class="chat-form" id="chatForm" autocomplete="off">
+        <input id="chatInput" maxlength="200" placeholder="채팅…">
+        <button type="submit" class="btn small">전송</button>
+      </form>
+    </aside>
+  </div>
+</section>
+
+<script src="/app.js"></script>
+</body>
+</html>

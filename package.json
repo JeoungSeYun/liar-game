@@ -1,0 +1,17 @@
+{
+  "name": "liar-game",
+  "version": "1.0.0",
+  "description": "친구들과 브라우저에서 즐기는 라이어 게임",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "tunnel": "npx --yes localtunnel --port 3000"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "license": "MIT"
+}
