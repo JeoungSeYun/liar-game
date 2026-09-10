@@ -1,5 +1,5 @@
 'use strict';
-// 4명의 봇이 한 라운드를 끝까지 플레이하는 통합 테스트.
+// 4명의 봇이 서버 모드로 여러 라운드를 끝까지 플레이하는 통합 테스트.
 // node test/sim.js
 const { spawn } = require('child_process');
 const path = require('path');
@@ -17,12 +17,14 @@ class Bot {
   constructor(name) {
     this.name = name;
     this.state = null;
+    this.chats = [];   // chat 메시지는 state 브로드캐스트에 실리지 않으므로 따로 모은다
     this.ws = new WebSocket(`ws://localhost:${PORT}`);
     this.ready = new Promise((res) => { this.ws.on('open', res); });
     this.ws.on('message', (raw) => {
       const m = JSON.parse(raw);
       if (m.t === 'joined') this.id = m.you;
       if (m.t === 'state') this.state = m;
+      if (m.t === 'chat') this.chats.push(m.msg);
       if (m.t === 'error') console.log(`[${this.name}] error:`, m.msg);
     });
   }
@@ -43,6 +45,21 @@ class Bot {
   await Promise.all(bots.map((b) => b.ready));
   const [host, ...others] = bots;
 
+  const liarOf = () => bots.find((b) => b.state.me && b.state.me.role === 'liar');
+  const secretWord = () => bots.find((b) => b.state.me && b.state.me.role === 'citizen').state.me.word;
+  const scoreOf = (b) => host.state.players.find((p) => p.id === b.id).score;
+
+  // 설명 단계를 방장 권한으로 전부 넘긴다.
+  async function skipHints(label) {
+    await host.until((s) => s.phase === 'hint', `hint ${label}`);
+    for (let i = 0; i < bots.length; i++) {
+      await host.until((st) => st.phase !== 'hint' || st.round.hints.length === i, `turn ${i} ${label}`);
+      if (host.state.phase !== 'hint') break;
+      host.send({ t: 'skip' });
+    }
+    await host.until((s) => s.phase === 'discuss', `discuss ${label}`);
+  }
+
   host.send({ t: 'create', name: host.name, token: 'tok-host' });
   const s0 = await host.until((s) => s.phase === 'lobby', 'lobby');
   const code = s0.code;
@@ -52,12 +69,14 @@ class Bot {
 
   host.send({ t: 'settings', settings: { hintTime: 10, discussTime: 30, voteTime: 10, guessTime: 10 } });
   await host.until((s) => s.settings.hintTime === 10, 'settings');
+  if (host.state.settings.liarGuess !== 'always') fail('liarGuess should default to always');
 
   // 방장 아닌 사람이 시작 시도 -> 무시돼야 함
   others[0].send({ t: 'start' });
   await wait(200);
   if (host.state.phase !== 'lobby') fail('non-host started game');
 
+  // ── 1라운드: 라이어를 잡고, 라이어가 정답을 맞혀 역전승 ──────────────
   host.send({ t: 'start' });
   await Promise.all(bots.map((b) => b.until((s) => s.phase === 'reveal', 'reveal')));
   const liars = bots.filter((b) => b.state.me.role === 'liar');
@@ -71,7 +90,6 @@ class Bot {
   bots.forEach((b) => b.send({ t: 'ready' }));
   await host.until((s) => s.phase === 'hint', 'hint phase');
 
-  // 설명: 각자 차례에 제출
   for (let i = 0; i < 4; i++) {
     const s = await host.until((st) => st.phase === 'hint' && st.round.hints.length === i, `turn ${i}`);
     const cur = bots.find((b) => b.id === s.round.turnId);
@@ -80,59 +98,114 @@ class Bot {
   await host.until((s) => s.phase === 'discuss', 'discuss');
   if (host.state.round.hints.length !== 4) fail('hint count');
 
-  // 채팅
   others[1].send({ t: 'chat', text: '민수 수상한데?' });
-  await wait(300);
-  const hasChat = host.state.chat.some((m) => m.text === '민수 수상한데?') ||
-    host.state.chat.length > 0; // 상태엔 브로드캐스트 시점 채팅만 포함될 수 있음
-  if (!hasChat) fail('chat');
+  await wait(400);
+  const said = host.chats.filter((m) => m.text === '민수 수상한데?');
+  if (said.length !== 1) fail(`chat delivered ${said.length} times, expected 1`);
+  if (host.state.chat.length !== new Set(host.state.chat.map((m) => m.text + m.ts)).size) fail('chat duplicated in state');
 
-  // 과반 투표 요청 -> 바로 투표
   bots.slice(0, 3).forEach((b) => b.send({ t: 'callVote' }));
   await host.until((s) => s.phase === 'vote', 'vote via majority call');
 
-  // 모두 라이어에게 투표
   const liar = liars[0];
   bots.filter((b) => b !== liar).forEach((b) => b.send({ t: 'vote', target: liar.id }));
   liar.send({ t: 'vote', target: citizens[0].id });
   await liar.until((s) => s.phase === 'guess' && Array.isArray(s.round.guessOptions), 'guess phase for liar');
-  if (host.state.round.guessOptions !== null && host !== liar) fail('non-liar can see guess options');
+  if (host !== liar && host.state.round.guessOptions !== null) fail('non-liar can see guess options');
+  if (host.state.round.caught !== true) fail('round 1 should be caught');
+  if (host.state.round.guesser !== liar.id) fail('guesser should be the caught liar');
   const opts = liar.state.round.guessOptions;
   if (opts.length !== 16 || !opts.includes(word)) fail('guess options');
 
   liar.send({ t: 'guess', word });
   await host.until((s) => s.phase === 'result', 'result');
-  const r = host.state.round;
-  if (r.outcome !== 'liar_guessed') fail(`outcome ${r.outcome}`);
+  let r = host.state.round;
+  if (r.outcome !== 'liar_guessed' || r.reason !== 'guess') fail(`round 1 ${r.outcome}/${r.reason}`);
   if (r.word !== word || !r.liars.includes(liar.id)) fail('result reveal');
-  const liarScore = host.state.players.find((p) => p.id === liar.id).score;
-  if (liarScore !== 2) fail(`liar score ${liarScore}`);
-  console.log('round 1 result:', r.outcome, 'scores', host.state.players.map((p) => `${p.name}:${p.score}`).join(' '));
+  if (scoreOf(liar) !== 2) fail(`liar score ${scoreOf(liar)}`);
+  console.log('round 1:', r.outcome, '| scores', host.state.players.map((p) => `${p.name}:${p.score}`).join(' '));
 
-  // 2라운드: 투표 타임아웃 + 동률 재투표 흐름
+  // ── 2라운드: 동률 재투표로 아무도 못 잡음 -> 그래도 라이어가 정답을 맞혀야 함 (틀림) ──
   host.send({ t: 'next' });
   await host.until((s) => s.phase === 'reveal' && s.roundNo === 2, 'round 2');
   host.send({ t: 'skip' });
-  await host.until((s) => s.phase === 'hint', 'hint 2');
-  for (let i = 0; i < 4; i++) { await host.until((st) => st.round.hints.length === i, `turn ${i}`); host.send({ t: 'skip' }); }
-  await host.until((s) => s.phase === 'discuss', 'discuss 2');
+  await skipHints('2');
   host.send({ t: 'skip' });
   await host.until((s) => s.phase === 'vote', 'vote 2');
-  // 2:2 동률
   bots[0].send({ t: 'vote', target: bots[1].id });
   bots[1].send({ t: 'vote', target: bots[0].id });
   bots[2].send({ t: 'vote', target: bots[1].id });
   bots[3].send({ t: 'vote', target: bots[0].id });
   await host.until((s) => s.phase === 'vote' && Array.isArray(s.round.voteCandidates), 'revote');
   if (host.state.round.voteCandidates.length !== 2) fail('revote candidates');
-  // 재투표에서 후보 아닌 사람에게 투표 -> 무시. 아무도 안 찍고 타임아웃(10초) -> 라이어 승
-  bots[2].send({ t: 'vote', target: bots[2].id });
-  await host.until((s) => s.phase === 'result', 'result 2', 15000);
-  if (host.state.round.outcome !== 'liar_escaped') fail(`round 2 outcome ${host.state.round.outcome}`);
-  console.log('round 2 result:', host.state.round.outcome, host.state.round.reason);
+  bots[2].send({ t: 'vote', target: bots[2].id }); // 후보가 아니므로 무시돼야 함
 
-  // 재접속: 민수 소켓 끊고 같은 토큰으로 다시 붙기
+  const liar2 = liarOf();
+  const secret2 = secretWord();
+  const before2 = bots.map((b) => scoreOf(b));
+  // 재투표 타임아웃 -> 못 잡았지만 always 모드라 정답 기회로 넘어간다
+  await liar2.until((s) => s.phase === 'guess', 'guess 2 (uncaught)', 15000);
+  if (host.state.round.caught !== false) fail('round 2 should be uncaught');
+  if (host.state.round.guesser !== liar2.id) fail('uncaught liar should be the guesser');
+  if (!Array.isArray(liar2.state.round.guessOptions)) fail('uncaught liar needs guess options');
+  const wrongWord = liar2.state.round.guessOptions.find((w) => w !== secret2);
+  liar2.send({ t: 'guess', word: wrongWord });
+  await host.until((s) => s.phase === 'result', 'result 2');
+  r = host.state.round;
+  if (r.outcome !== 'citizens_win' || r.reason !== 'escaped_wrong') fail(`round 2 ${r.outcome}/${r.reason}`);
+  bots.forEach((b, i) => {
+    const gained = scoreOf(b) - before2[i];
+    const expect = b === liar2 ? 0 : 1;
+    if (gained !== expect) fail(`round 2 score for ${b.name}: +${gained}, expected +${expect}`);
+  });
+  console.log('round 2:', r.outcome, r.reason, '| 라이어가 못 맞혀서 시민 승리');
+
+  // ── 3라운드: 엉뚱한 사람을 지목 -> 라이어가 정답까지 맞혀 완승 ──────────
+  host.send({ t: 'next' });
+  await host.until((s) => s.phase === 'reveal' && s.roundNo === 3, 'round 3');
+  host.send({ t: 'skip' });
+  await skipHints('3');
+  host.send({ t: 'skip' });
+  await host.until((s) => s.phase === 'vote', 'vote 3');
+  const liar3 = liarOf();
+  const secret3 = secretWord();
+  const scapegoat = bots.find((b) => b !== liar3);
+  const before3 = scoreOf(liar3);
+  bots.filter((b) => b !== scapegoat).forEach((b) => b.send({ t: 'vote', target: scapegoat.id }));
+  scapegoat.send({ t: 'vote', target: bots.find((b) => b !== scapegoat).id });
+  await liar3.until((s) => s.phase === 'guess', 'guess 3 (wrong pick)');
+  if (host.state.round.caught !== false) fail('round 3 should be uncaught');
+  liar3.send({ t: 'guess', word: secret3 });
+  await host.until((s) => s.phase === 'result', 'result 3');
+  r = host.state.round;
+  if (r.outcome !== 'liar_escaped' || r.reason !== 'escaped_guess') fail(`round 3 ${r.outcome}/${r.reason}`);
+  if (scoreOf(liar3) - before3 !== 3) fail(`round 3 liar gained ${scoreOf(liar3) - before3}, expected +3`);
+  console.log('round 3:', r.outcome, r.reason, '| 안 잡히고 정답까지 맞혀 +3');
+
+  // ── caught 모드: 못 잡으면 정답 기회 없이 바로 라이어 승 (기존 규칙 보존) ──
+  host.send({ t: 'lobby' });
+  await host.until((s) => s.phase === 'lobby', 'back to lobby');
+  host.send({ t: 'settings', settings: { liarGuess: 'caught' } });
+  await host.until((s) => s.settings.liarGuess === 'caught', 'caught mode');
+  host.send({ t: 'start' });
+  await host.until((s) => s.phase === 'reveal', 'reveal caught-mode');
+  host.send({ t: 'skip' });
+  await skipHints('caught');
+  host.send({ t: 'skip' });
+  await host.until((s) => s.phase === 'vote', 'vote caught-mode');
+  const liar4 = liarOf();
+  const scapegoat4 = bots.find((b) => b !== liar4);
+  bots.filter((b) => b !== scapegoat4).forEach((b) => b.send({ t: 'vote', target: scapegoat4.id }));
+  scapegoat4.send({ t: 'vote', target: bots.find((b) => b !== scapegoat4).id });
+  await host.until((s) => s.phase === 'result', 'result caught-mode');
+  r = host.state.round;
+  if (r.outcome !== 'liar_escaped' || r.reason !== 'wrong_pick') fail(`caught mode ${r.outcome}/${r.reason}`);
+  if (r.guesser !== null) fail('caught mode should not give an uncaught liar a guess');
+  console.log('caught 모드:', r.outcome, r.reason, '| 정답 단계 없이 종료');
+
+  // ── 재접속: 민수 소켓을 끊고 같은 토큰으로 다시 붙기 ──────────────────
   const minsu = others[0];
+  const minsuScore = scoreOf(minsu);
   minsu.ws.close();
   await host.until((s) => s.players.find((p) => p.name === '민수').connected === false, 'disconnect');
   const minsu2 = new Bot('민수');
@@ -140,9 +213,8 @@ class Bot {
   minsu2.send({ t: 'join', code, name: '민수', token: 'tok-0' });
   await host.until((s) => s.players.find((p) => p.name === '민수').connected === true, 'reconnect');
   if (host.state.players.length !== 4) fail('reconnect duplicated player');
+  if (host.state.players.find((p) => p.name === '민수').score !== minsuScore) fail('score lost on reconnect');
 
-  host.send({ t: 'lobby' });
-  await host.until((s) => s.phase === 'lobby', 'back to lobby');
   console.log('ALL OK');
   srv.kill();
   process.exit(0);

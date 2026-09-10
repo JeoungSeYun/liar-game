@@ -316,6 +316,7 @@ function stageLobby() {
         : `<span class="val">${esc((catOpts.find(([v]) => v === s.category) || ['', '?'])[1])}</span>`}</label>
       <div class="setting"><span>라이어 수 <span class="muted">(6명 이상일 때 2명 가능)</span></span>${seg('liarCount', [[1, '1명'], [2, '2명']])}</div>
       <div class="setting"><span>바보 모드 <span class="muted">(라이어도 자기가 라이어인 줄 모름)</span></span>${seg('fool', [[false, '끔'], [true, '켬']])}</div>
+      <div class="setting"><span>라이어 최후 추리 <span class="muted">(항상: 안 잡혀도 제시어를 맞혀야 승리)</span></span>${seg('liarGuess', [['always', '항상'], ['caught', '지목됐을 때만']])}</div>
       <div class="setting"><span>설명 바퀴 수</span>${seg('hintRounds', [[1, '1바퀴'], [2, '2바퀴']])}</div>
       ${num('hintTime', '설명 시간 (1인당)', [15, 20, 30, 45, 60, 90])}
       ${num('discussTime', '토론 시간', [30, 60, 90, 120, 180, 300])}
@@ -450,13 +451,21 @@ function stageVote() {
 function stageGuess() {
   const r = S.round;
   const mine = r.guessOptions;
+  const myTurn = mine
+    ? (r.caught
+      ? '당신이 라이어로 지목됐어요! 시민들의 설명을 떠올려 제시어를 고르세요. 맞히면 역전승.'
+      : '들키지 않았어요! 하지만 제시어까지 맞혀야 이깁니다. 설명을 떠올려 고르세요.')
+    : null;
+  const watching = r.caught
+    ? `<b>${esc(nameOf(r.guesser))}</b>님이 라이어였어요! 지금 제시어를 맞히는 중… 맞히면 라이어 승리.`
+    : `라이어를 잡지 못했어요. 하지만 <b>${esc(nameOf(r.guesser))}</b>님이 제시어를 맞혀야 라이어가 이깁니다.`;
   return `
   <div class="panel">
     <h2>최후의 기회</h2>
     ${mine
-      ? `<div class="banner warn">당신이 라이어로 지목됐어요! 시민들의 설명을 떠올려 제시어를 고르세요. 맞히면 역전승.</div>
+      ? `<div class="banner warn">${myTurn}</div>
          <div class="guess-grid" style="margin-top:12px">${mine.map((w) => `<button class="guess-btn" data-guess="${esc(w)}">${esc(w)}</button>`).join('')}</div>`
-      : `<div class="banner gold"><b>${esc(nameOf(r.accused))}</b>님이 라이어였어요! 지금 제시어를 맞히는 중… 맞히면 라이어 승리.</div>`}
+      : `<div class="banner gold">${watching}</div>`}
   </div>
   <div class="panel"><h3>투표 결과</h3>${tallyBlock(r.lastTally, r.order)}</div>
   <div class="panel"><h3>설명 다시 보기</h3>${hintsBlock(r)}</div>`;
@@ -466,12 +475,19 @@ function stageGuess() {
 function stageResult() {
   const r = S.round;
   const liarNames = r.liars.map(nameOf).join(', ');
-  const title = { citizens_win: ['시민 승리', 'citizens'], liar_guessed: ['라이어 역전승', 'liar'], liar_escaped: ['라이어 승리', 'liar'] }[r.outcome];
+  const guesserName = r.guesser ? nameOf(r.guesser) : liarNames;
+  const title = {
+    citizens_win: ['시민 승리', 'citizens'],
+    liar_guessed: ['라이어 역전승', 'liar'],
+    liar_escaped: [r.reason === 'escaped_guess' ? '라이어 완승' : '라이어 승리', 'liar'],
+  }[r.outcome];
   const reason = {
-    wrong_guess: `${liarNames}님이 "${r.guess}"라고 답했지만 틀렸어요.`,
+    wrong_guess: `${guesserName}님이 "${r.guess}"라고 답했지만 틀렸어요.`,
+    escaped_wrong: `라이어를 못 잡았지만, ${guesserName}님이 "${r.guess}"라고 답해 제시어를 끝내 몰랐어요.`,
+    guess: `${guesserName}님이 지목당했지만 제시어를 정확히 맞혔어요.`,
+    escaped_guess: `${guesserName}님이 들키지도 않고 제시어까지 맞혔어요.`,
     timeout: '라이어가 시간 안에 답하지 못했어요.',
-    guess: `${liarNames}님이 지목당했지만 제시어를 정확히 맞혔어요.`,
-    wrong_pick: `${nameOf(r.accused)}님은 라이어가 아니었어요.`,
+    wrong_pick: `${r.accused ? nameOf(r.accused) : '지목된 사람'}님은 라이어가 아니었어요.`,
     tie: '재투표까지 동률이라 라이어를 못 잡았어요.',
     no_vote: '아무도 투표하지 않았어요.',
   }[r.reason] || '';

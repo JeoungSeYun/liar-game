@@ -16,6 +16,9 @@
     category: 'random',
     liarCount: 1,
     fool: false,
+    // always: 투표 결과와 상관없이 라이어가 마지막에 제시어를 맞혀야 이긴다.
+    // caught: 지목당했을 때만 정답 기회를 준다.
+    liarGuess: 'always',
     hintRounds: 1,
     hintTime: 30,
     discussTime: 90,
@@ -246,6 +249,7 @@
       if (s.category === 'random' || CATEGORIES[s.category]) out.category = s.category;
       if (s.liarCount === 1 || s.liarCount === 2) out.liarCount = s.liarCount;
       if (typeof s.fool === 'boolean') out.fool = s.fool;
+      if (s.liarGuess === 'always' || s.liarGuess === 'caught') out.liarGuess = s.liarGuess;
       if (s.hintRounds === 1 || s.hintRounds === 2) out.hintRounds = s.hintRounds;
       for (const k of Object.keys(TIME_LIMITS)) {
         if (Number.isFinite(s[k])) out[k] = clamp(Math.round(s[k]), TIME_LIMITS[k][0], TIME_LIMITS[k][1]);
@@ -307,6 +311,8 @@
         revoteCandidates: null,
         revoted: false,
         accused: null,
+        caught: false,
+        guesser: null,
         guessOptions: null,
         guess: null,
         outcome: null,
@@ -455,7 +461,7 @@
       const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
       if (entries.length === 0) {
         this.say('아무도 투표하지 않았어요.');
-        return this.finish('liar_escaped', 'no_vote');
+        return this.afterVote(null, 'no_vote');
       }
       const top = entries[0][1];
       const tied = entries.filter(([, n]) => n === top).map(([id]) => id);
@@ -464,17 +470,37 @@
           r.revoted = true;
           return this.startVote(tied);
         }
-        this.say('다시 투표해도 동률이에요. 라이어가 빠져나갔어요!');
-        return this.finish('liar_escaped', 'tie');
+        this.say('다시 투표해도 동률이라 아무도 지목하지 못했어요.');
+        return this.afterVote(null, 'tie');
       }
       r.accused = tied[0];
       const accusedName = this.players.get(r.accused)?.name || '?';
       if (r.liars.includes(r.accused)) {
-        this.say(`${accusedName}님이 지목됐어요. 정체는... 라이어! 마지막 기회, 제시어를 맞혀보세요.`);
-        return this.startGuess();
+        this.say(`${accusedName}님이 지목됐어요. 정체는... 라이어!`);
+        return this.afterVote(r.accused, 'caught');
       }
       this.say(`${accusedName}님이 지목됐어요. 하지만 라이어가 아니었어요!`);
-      return this.finish('liar_escaped', 'wrong_pick');
+      return this.afterVote(null, 'wrong_pick');
+    }
+
+    // 투표가 끝난 뒤 누가 제시어를 맞힐 차례인지 정한다.
+    // always 모드에서는 라이어를 못 잡아도 라이어가 정답을 맞혀야 이긴다.
+    afterVote(caughtLiarId, how) {
+      const r = this.round;
+      r.caught = Boolean(caughtLiarId);
+      if (caughtLiarId) {
+        r.guesser = caughtLiarId;
+      } else if (this.settings.liarGuess === 'always') {
+        r.guesser = r.liars.find((id) => this.players.get(id)?.connected) || r.liars[0] || null;
+      } else {
+        r.guesser = null;
+      }
+      if (!r.guesser) return this.finish('liar_escaped', how);
+      const gName = this.players.get(r.guesser)?.name || '?';
+      this.say(r.caught
+        ? `마지막 기회! ${gName}님이 제시어를 맞히면 라이어가 이겨요.`
+        : `라이어를 잡지 못했어요. 그래도 ${gName}님이 제시어를 맞혀야 라이어가 이겨요.`);
+      return this.startGuess();
     }
 
     startGuess() {
@@ -488,11 +514,15 @@
 
     guess(p, word) {
       const r = this.round;
-      if (this.phase !== 'guess' || !r || p.id !== r.accused) return;
+      if (this.phase !== 'guess' || !r || p.id !== r.guesser) return;
       if (!r.guessOptions.includes(word)) return;
       r.guess = word;
-      if (word === r.word) this.finish('liar_guessed', 'guess');
-      else this.finish('citizens_win', 'wrong_guess');
+      if (word === r.word) {
+        // 잡히고도 맞히면 역전승, 안 잡히고 맞히면 완승
+        this.finish(r.caught ? 'liar_guessed' : 'liar_escaped', r.caught ? 'guess' : 'escaped_guess');
+      } else {
+        this.finish('citizens_win', r.caught ? 'wrong_guess' : 'escaped_wrong');
+      }
     }
 
     finish(outcome, reason) {
@@ -512,7 +542,7 @@
       if (outcome === 'citizens_win') {
         for (const id of r.participants) if (!r.liars.includes(id)) add(id, SCORE.citizen);
       } else if (outcome === 'liar_guessed') {
-        for (const id of r.liars) add(id, id === r.accused ? SCORE.liarGuessed : SCORE.liarOtherOnGuess);
+        for (const id of r.liars) add(id, id === r.guesser ? SCORE.liarGuessed : SCORE.liarOtherOnGuess);
       } else if (outcome === 'liar_escaped') {
         for (const id of r.liars) add(id, SCORE.liarEscaped);
       }
@@ -625,7 +655,7 @@
       let me = null;
       if (r && r.participants.includes(p.id)) {
         const isLiar = r.liars.includes(p.id);
-        if (isLiar && this.settings.fool && !result && !(this.phase === 'guess' && r.accused === p.id)) {
+        if (isLiar && this.settings.fool && !result && !(this.phase === 'guess' && r.guesser === p.id)) {
           me = { role: 'citizen', word: r.foolWord, fool: true };
         } else {
           me = { role: isLiar ? 'liar' : 'citizen', word: isLiar ? null : r.word };
@@ -665,7 +695,9 @@
           lastTally: (this.phase === 'guess' || result || r.revoteCandidates) ? r.lastTally : null,
           voteCallCount: r.voteCalls.size,
           accused: r.accused,
-          guessOptions: this.phase === 'guess' && r.accused === p.id ? r.guessOptions : null,
+          caught: r.caught,
+          guesser: r.guesser,
+          guessOptions: this.phase === 'guess' && r.guesser === p.id ? r.guessOptions : null,
           guess: result ? r.guess : null,
           word: result ? r.word : null,
           foolWord: result ? r.foolWord : null,
