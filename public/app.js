@@ -3,13 +3,22 @@
 // ---------- 저장소 & 유틸 ----------
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const store = {
-  get() { try { return JSON.parse(localStorage.getItem('liar-game') || '{}'); } catch (e) { return {}; } },
-  set(patch) { try { localStorage.setItem('liar-game', JSON.stringify({ ...store.get(), ...patch })); } catch (e) { /* ignore */ } },
-};
+function bucket(storage, key) {
+  return {
+    get() { try { return JSON.parse(storage.getItem(key) || '{}'); } catch (e) { return {}; } },
+    set(patch) { try { storage.setItem(key, JSON.stringify({ ...this.get(), ...patch })); } catch (e) { /* ignore */ } },
+  };
+}
+// 닉네임은 브라우저 전체에서 기억한다.
+const store = bucket(localStorage, 'liar-game');
+// 신원과 참가 중인 방은 탭마다 따로 둔다. 같은 탭을 새로고침하면 그대로 이어지고,
+// 새 탭에서 초대 링크를 열면 이전 세션을 물려받지 않고 깨끗하게 시작한다.
+const session = bucket(sessionStorage, 'liar-game');
+
 const saved = store.get();
-const token = saved.token || (globalThis.crypto?.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36));
-store.set({ token });
+const mine = session.get();
+const token = mine.token || (globalThis.crypto?.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36));
+session.set({ token });
 const IS_P2P = Net.mode === 'p2p';
 
 const PHASE_LABEL = {
@@ -62,7 +71,8 @@ Net.onMessage = (m) => {
   if (!m || typeof m !== 'object') return;
   switch (m.t) {
     case 'joined':
-      store.set({ code: m.code, name: m.name, role: Net.role });
+      store.set({ name: m.name });
+      session.set({ code: m.code, role: Net.role });
       showGame(true);
       history.replaceState(null, '', `?room=${m.code}`);
       break;
@@ -80,20 +90,20 @@ Net.onMessage = (m) => {
       break;
     case 'error':
       toast(m.msg, 4500);
-      if (m.code === 'no_room' || m.code === 'full') { store.set({ code: null, role: null }); showGame(false); }
+      if (m.code === 'no_room' || m.code === 'full') { session.set({ code: null, role: null }); showGame(false); }
       break;
     case 'kicked':
       toast('방장이 당신을 내보냈어요.');
-      store.set({ code: null, role: null });
+      session.set({ code: null, role: null });
       showGame(false);
       break;
     case 'roomClosed':
       toast('방장이 방을 닫았어요.', 4500);
-      store.set({ code: null, role: null });
+      session.set({ code: null, role: null });
       showGame(false);
       break;
     case 'left':
-      store.set({ code: null, role: null });
+      session.set({ code: null, role: null });
       showGame(false);
       break;
     default:
@@ -141,7 +151,7 @@ $('#leaveBtn').addEventListener('click', () => {
     : (S && S.phase !== 'lobby' ? '게임 중이에요. 정말 나갈까요?' : null);
   if (msg && !confirm(msg)) return;
   Net.leave();
-  store.set({ code: null, role: null });
+  session.set({ code: null, role: null });
   showGame(false);
 });
 
@@ -538,4 +548,14 @@ document.addEventListener('submit', (e) => {
 
 // ---------- 시작 ----------
 Net.init();
-Net.resume({ code: saved.code || null, name: saved.name || '', token, role: saved.role || null });
+
+// 초대 링크가 이전 세션보다 우선한다. 다른 방 링크를 눌렀는데 이 탭이 옛 방으로
+// 되돌아가면 링크를 보낸 쪽과 영영 만나지 못한다.
+let resumeCode = mine.code || null;
+let resumeRole = mine.role || null;
+if (urlRoom && urlRoom.toUpperCase() !== resumeCode) {
+  resumeCode = null;
+  resumeRole = null;
+  session.set({ code: null, role: null });
+}
+Net.resume({ code: resumeCode, name: saved.name || '', token, role: resumeRole });
