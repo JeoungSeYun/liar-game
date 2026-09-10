@@ -4,11 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>라이어 게임</title>
-<meta name="description" content="친구들과 브라우저에서 즐기는 라이어 게임. 방 코드 하나로 바로 시작.">
+<meta name="description" content="설치 없이 링크만으로 친구들과 즐기는 라이어 게임. 방 코드 하나로 바로 시작.">
+<meta property="og:title" content="라이어 게임">
+<meta property="og:description" content="설치 없이 링크만으로 친구들과 즐기는 라이어 게임.">
+<meta property="og:type" content="website">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Noto+Sans+KR:wght@400;500;700&display=swap">
-<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="./style.css">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230e0c12'/%3E%3Ctext x='32' y='44' font-size='36' text-anchor='middle' fill='%23d4a64a' font-family='sans-serif' font-weight='900'%3EL%3C/text%3E%3C/svg%3E">
 </head>
 <body>
@@ -34,7 +37,7 @@
           <button type="submit" id="joinBtn" class="btn big">참가</button>
         </div>
       </div>
-      <div id="connStatus" class="conn-status">서버 연결 중…</div>
+      <div id="connStatus" class="conn-status">준비 중…</div>
     </form>
     <details class="rules">
       <summary>게임 규칙</summary>
@@ -45,8 +48,9 @@
         <li>라이어가 지목되면 마지막 기회! 제시어를 맞히면 라이어가 역전승합니다.</li>
         <li>바보 모드: 라이어에게 <b>다른 제시어</b>를 주고 본인도 라이어인 줄 모르게 합니다.</li>
       </ol>
-      <p class="score-rule">점수: 시민 승리 +1 · 라이어 정답 +2 · 라이어 생존 +3</p>
+      <p class="score-rule">점수: 시민 승리 +1 · 라이어 정답 +2 · 라이어 생존 +3 · 3~12명</p>
     </details>
+    <p class="how">방을 만들고 <b>초대 링크</b>를 보내면 끝. 설치도 로그인도 없습니다. 방을 만든 사람의 브라우저가 방을 유지하니, 게임 중에는 탭을 닫지 마세요.</p>
   </div>
 </section>
 
@@ -59,7 +63,7 @@
     </div>
     <div class="topbar-mid" id="phaseLabel"></div>
     <div class="topbar-right">
-      <span id="connDot" class="conn-dot" title="서버 연결"></span>
+      <span id="connDot" class="conn-dot" title="연결 상태"></span>
       <button id="leaveBtn" class="btn ghost small">나가기</button>
     </div>
   </header>
@@ -81,6 +85,14 @@
   </div>
 </section>
 
-<script src="/app.js"></script>
+<script>window.LIAR_MODE = "p2p";</script>
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.5/dist/peerjs.min.js"></script>
+<script>
+  if (!window.Peer) document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.5/peerjs.min.js"><\/script>');
+</script>
+<script src="./words.js"></script>
+<script src="./engine.js"></script>
+<script src="./net.js"></script>
+<script src="./app.js"></script>
 </body>
 </html>

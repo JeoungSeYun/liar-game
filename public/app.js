@@ -8,24 +8,23 @@ const store = {
   set(patch) { try { localStorage.setItem('liar-game', JSON.stringify({ ...store.get(), ...patch })); } catch (e) { /* ignore */ } },
 };
 const saved = store.get();
-const token = saved.token || (window.crypto && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36));
+const token = saved.token || (globalThis.crypto?.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36));
 store.set({ token });
+const IS_P2P = Net.mode === 'p2p';
 
 const PHASE_LABEL = {
   lobby: '대기실', reveal: '카드 확인', hint: '설명', discuss: '토론', vote: '투표', guess: '최후의 기회', result: '결과',
 };
 
-let ws = null;
-let S = null;            // 마지막 서버 상태
-let clockOffset = 0;     // 서버 시각 - 내 시각
+let S = null;            // 마지막 상태
+let clockOffset = 0;     // 방장/서버 시각 - 내 시각
 let chat = [];
 let flipped = {};        // roundNo -> 카드 뒤집힘
 let myVote = null;
-let pendingJoin = null;  // 소켓 열리기 전 요청
 let lastTurnBeep = null;
 let toastTimer = null;
 
-function toast(msg, ms = 2600) {
+function toast(msg, ms = 3000) {
   const el = $('#toast');
   el.textContent = msg;
   el.hidden = false;
@@ -48,43 +47,22 @@ function beep(freq = 880, dur = 0.12) {
   } catch (e) { /* 소리 없어도 됨 */ }
 }
 
-// ---------- 소켓 ----------
-function send(obj) {
-  if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
-}
+const send = (obj) => Net.send(obj);
 
-function connect() {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}`);
-  ws.onopen = () => {
-    setConn(true);
-    if (pendingJoin) { send(pendingJoin); pendingJoin = null; return; }
-    const s = store.get();
-    if (s.code) send({ t: 'join', code: s.code, name: s.name || '', token });
-  };
-  ws.onmessage = (e) => {
-    let m;
-    try { m = JSON.parse(e.data); } catch (err) { return; }
-    onMessage(m);
-  };
-  ws.onclose = () => {
-    setConn(false);
-    setTimeout(connect, 1500);
-  };
-  ws.onerror = () => { try { ws.close(); } catch (e) { /* ignore */ } };
-}
-
-function setConn(ok) {
+// ---------- 네트워크 연결 ----------
+Net.onStatus = (ok, text) => {
   const st = $('#connStatus');
-  st.textContent = ok ? '서버 연결됨' : '서버 연결 중… (연결이 끊기면 자동으로 다시 붙어요)';
+  st.textContent = text || (IS_P2P ? '준비됨 · 서버 없이 브라우저끼리 연결돼요' : '서버 연결 중…');
   st.classList.toggle('ok', ok);
   $('#connDot').classList.toggle('ok', ok);
-}
+  $('#connDot').title = text || '';
+};
 
-function onMessage(m) {
+Net.onMessage = (m) => {
+  if (!m || typeof m !== 'object') return;
   switch (m.t) {
     case 'joined':
-      store.set({ code: m.code, name: m.name });
+      store.set({ code: m.code, name: m.name, role: Net.role });
       showGame(true);
       history.replaceState(null, '', `?room=${m.code}`);
       break;
@@ -101,33 +79,38 @@ function onMessage(m) {
       appendChat(m.msg);
       break;
     case 'error':
-      toast(m.msg);
-      if (m.code === 'no_room') { store.set({ code: null }); showGame(false); }
+      toast(m.msg, 4500);
+      if (m.code === 'no_room' || m.code === 'full') { store.set({ code: null, role: null }); showGame(false); }
       break;
     case 'kicked':
       toast('방장이 당신을 내보냈어요.');
-      store.set({ code: null });
+      store.set({ code: null, role: null });
+      showGame(false);
+      break;
+    case 'roomClosed':
+      toast('방장이 방을 닫았어요.', 4500);
+      store.set({ code: null, role: null });
       showGame(false);
       break;
     case 'left':
-      store.set({ code: null });
+      store.set({ code: null, role: null });
       showGame(false);
       break;
     default:
       break;
   }
-}
+};
 
 function showGame(on) {
   $('#home').hidden = on;
   $('#game').hidden = !on;
-  if (!on) { S = null; chat = []; history.replaceState(null, '', location.pathname); }
+  if (!on) { S = null; chat = []; renderChat(); history.replaceState(null, '', location.pathname); }
 }
 
 // ---------- 홈 ----------
 $('#nameInput').value = saved.name || '';
 const urlRoom = new URLSearchParams(location.search).get('room');
-if (urlRoom) $('#codeInput').value = urlRoom.toUpperCase();
+if (urlRoom) $('#codeInput').value = urlRoom.toUpperCase().slice(0, 4);
 
 function requireName() {
   const name = $('#nameInput').value.trim();
@@ -139,8 +122,7 @@ function requireName() {
 $('#createBtn').addEventListener('click', () => {
   const name = requireName();
   if (!name) return;
-  const msg = { t: 'create', name, token };
-  if (ws && ws.readyState === 1) send(msg); else pendingJoin = msg;
+  Net.createRoom(name, token);
 });
 
 $('#homeForm').addEventListener('submit', (e) => {
@@ -149,15 +131,26 @@ $('#homeForm').addEventListener('submit', (e) => {
   if (!name) return;
   const code = $('#codeInput').value.trim().toUpperCase();
   if (code.length !== 4) { toast('방 코드 4글자를 입력하세요.'); $('#codeInput').focus(); return; }
-  const msg = { t: 'join', code, name, token };
-  if (ws && ws.readyState === 1) send(msg); else pendingJoin = msg;
+  Net.joinRoom(code, name, token);
 });
 
 $('#leaveBtn').addEventListener('click', () => {
-  if (S && S.phase !== 'lobby' && !confirm('게임 중이에요. 정말 나갈까요?')) return;
-  send({ t: 'leave' });
-  store.set({ code: null });
+  const hostClosesRoom = IS_P2P && Net.role === 'host';
+  const msg = hostClosesRoom
+    ? '나가면 방이 닫히고 다른 사람들도 게임이 끝나요. 정말 나갈까요?'
+    : (S && S.phase !== 'lobby' ? '게임 중이에요. 정말 나갈까요?' : null);
+  if (msg && !confirm(msg)) return;
+  Net.leave();
+  store.set({ code: null, role: null });
   showGame(false);
+});
+
+// 방장이 실수로 탭을 닫는 것 방지
+window.addEventListener('beforeunload', (e) => {
+  if (IS_P2P && Net.role === 'host' && S && S.players.length > 1) {
+    e.preventDefault();
+    e.returnValue = '';
+  }
 });
 
 // ---------- 채팅 ----------
@@ -262,7 +255,6 @@ function hostBar(buttons) {
 
 function renderStage() {
   const stage = $('#stage');
-  // 입력 중이던 힌트 보존
   const hintEl = $('#hintInput');
   const keep = hintEl ? { value: hintEl.value, focus: document.activeElement === hintEl } : null;
 
@@ -286,6 +278,9 @@ function stageLobby() {
     ? `<select data-set="${key}">${opts.map((v) => `<option value="${v}" ${s[key] === v ? 'selected' : ''}>${v}초</option>`).join('')}</select>`
     : `<span class="val">${s[key]}초</span>`}</label>`;
   const catOpts = [['random', '랜덤'], ...S.categories.map((c) => [c.key, c.name])];
+  const p2pNote = IS_P2P && Net.role === 'host'
+    ? '<div class="banner note">이 브라우저 탭이 방을 유지해요. 게임이 끝날 때까지 닫지 마세요.</div>'
+    : '';
 
   return `
   <div class="panel">
@@ -293,13 +288,14 @@ function stageLobby() {
       <div>
         <div class="eyebrow">초대 코드</div>
         <div class="invite-code">${S.code}</div>
-        <div class="help">친구에게 코드나 링크를 보내세요. 같은 주소로 접속해 코드를 입력하면 들어와요.</div>
+        <div class="help">링크를 보내면 코드 없이 바로 들어와요.</div>
       </div>
       <div class="invite-actions">
-        <button class="btn" data-copy="${esc(link)}">초대 링크 복사</button>
+        <button class="btn primary" data-copy="${esc(link)}">초대 링크 복사</button>
         <button class="btn ghost" data-copy="${S.code}">코드만 복사</button>
       </div>
     </div>
+    ${p2pNote}
   </div>
   <div class="panel">
     <h2>게임 설정</h2>
@@ -431,7 +427,7 @@ function stageVote() {
   return `
   <div class="panel">
     <div class="row spread"><h2>${r.voteCandidates ? '재투표' : '투표'}</h2>${myWordChip()}</div>
-    ${r.voteCandidates ? `<div class="banner warn">동률이 나왔어요. 아래 사람들 중에서 다시 고르세요. 또 동률이면 라이어 승리!</div>` : ''}
+    ${r.voteCandidates ? '<div class="banner warn">동률이 나왔어요. 아래 사람들 중에서 다시 고르세요. 또 동률이면 라이어 승리!</div>' : ''}
     <p class="help">라이어라고 생각하는 사람을 고르세요. 바꿀 수 있어요. <span class="tabular">${voted}/${alive}명 투표</span></p>
     <div class="vote-grid">${grid}</div>
     ${hostBar('<button class="btn ghost small" data-act="skip">투표 마감</button>')}
@@ -494,12 +490,9 @@ function stageResult() {
 document.addEventListener('click', (e) => {
   const t = e.target.closest('[data-act],[data-copy],[data-flip],[data-vote],[data-guess],[data-set],[data-kick]');
   if (!t || !S) return;
-  if (t.dataset.act) {
-    send({ t: t.dataset.act });
-    return;
-  }
+  if (t.dataset.act) return send({ t: t.dataset.act });
   if (t.dataset.copy !== undefined) {
-    navigator.clipboard?.writeText(t.dataset.copy).then(() => toast('복사했어요!'), () => toast(t.dataset.copy, 5000));
+    navigator.clipboard?.writeText(t.dataset.copy).then(() => toast('복사했어요!'), () => toast(t.dataset.copy, 6000));
     return;
   }
   if (t.dataset.flip !== undefined) {
@@ -518,8 +511,7 @@ document.addEventListener('click', (e) => {
     return;
   }
   if (t.dataset.set && t.tagName === 'BUTTON') {
-    send({ t: 'settings', settings: { [t.dataset.set]: JSON.parse(t.dataset.val) } });
-    return;
+    return send({ t: 'settings', settings: { [t.dataset.set]: JSON.parse(t.dataset.val) } });
   }
   if (t.dataset.kick) {
     if (confirm(`${nameOf(t.dataset.kick)}님을 내보낼까요?`)) send({ t: 'kick', id: t.dataset.kick });
@@ -544,5 +536,6 @@ document.addEventListener('submit', (e) => {
   input.value = '';
 });
 
-// 뒤로가기/새로고침 대비: 방 코드가 저장돼 있으면 자동 재접속
-connect();
+// ---------- 시작 ----------
+Net.init();
+Net.resume({ code: saved.code || null, name: saved.name || '', token, role: saved.role || null });

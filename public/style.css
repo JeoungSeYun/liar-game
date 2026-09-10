@@ -95,6 +95,9 @@ select { appearance: none; }
 .rules ol { padding-left: 18px; margin: 10px 0; display: grid; gap: 6px; }
 .rules b { color: var(--text); }
 .score-rule { margin: 6px 0 2px; font-size: 13px; }
+.how { color: var(--muted); font-size: 13px; margin: 0; line-height: 1.6; }
+.how b { color: var(--gold); }
+.conn-status.err { color: var(--crimson); }
 
 /* ---------- 게임 레이아웃 ---------- */
 .game { height: 100vh; height: 100dvh; display: flex; flex-direction: column; }
@@ -236,6 +239,7 @@ select { appearance: none; }
 .banner { padding: 12px 14px; border-radius: 8px; font-weight: 500; }
 .banner.warn { background: var(--crimson-soft); border: 1px solid var(--crimson); }
 .banner.gold { background: var(--gold-soft); border: 1px solid var(--gold); }
+.banner.note { background: var(--bg-2); border: 1px dashed var(--line); color: var(--muted); font-size: 13px; margin-top: 12px; }
 
 /* ---------- 정답 맞히기 ---------- */
 .guess-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
